@@ -3089,7 +3089,7 @@ def _seed_builtin_diagnostic_sloppaks(dlc: Path | None = None) -> None:
 
 
 def _background_scan():
-    """Scan all PSARCs and cache metadata on startup. Uses process pool to bypass the GIL for CPU-bound AES decryption.
+    """Scan the library and cache song metadata on startup. Uses a process pool to bypass the GIL for CPU-bound metadata parsing.
 
     Never sets `_scan_status["running"] = False` — ownership of that flag
     lives in `_scan_runner` so a `_kick_scan()` racing this function's
@@ -6523,7 +6523,7 @@ async def upload_song_art_b64(filename: str, data: dict):
 
 @app.get("/api/song/{filename:path}")
 async def get_song_info(filename: str):
-    """Return song metadata, from cache or by extracting PSARC."""
+    """Return song metadata, from cache or by extracting it from the song source."""
     import asyncio
     dlc = _get_dlc_dir()
     if not dlc:
