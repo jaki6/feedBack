@@ -1,4 +1,4 @@
-"""Audio extraction and conversion for the source game custom song."""
+"""Audio extraction and conversion for custom songs."""
 
 import logging
 import os

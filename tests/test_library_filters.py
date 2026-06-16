@@ -294,7 +294,7 @@ def test_year_sort_asc_oldest_first(client, seeded):
 
 def test_tuning_sort_down_tuned_before_up_tuned_at_same_distance(client, server_mod):
     """Within an ABS(tuning_sort_key) tier, the down-tuned variant
-    must come before the up-tuned one so the order matches the source game's
+    must come before the up-tuned one so the order matches the chart's
     grouping (Eb Standard before F Standard at distance 6, etc.).
     Earlier code used signed-key DESC for the tiebreaker, which put
     +6 before -6 — the opposite of intent. Regression for Copilot

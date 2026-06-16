@@ -176,7 +176,7 @@ def _arr_type_from_filename(stem: str) -> tuple:
 
 
 def _parse_xml_meta(xml_path: Path) -> dict:
-    """Parse a the source game arrangement XML and return song-level metadata."""
+    """Parse a chart arrangement XML and return song-level metadata."""
     try:
         root = ET.parse(str(xml_path)).getroot()
         if root.tag != "song":

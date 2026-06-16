@@ -133,7 +133,7 @@ def test_int_optional_falls_back_on_overflow():
 def test_parse_note_falls_back_to_default_on_malformed_numeric_attrs():
     """Malformed numeric XML attributes degrade gracefully.
 
-    Third-party the source game XML occasionally emits empty / non-numeric
+    Third-party arrangement XML occasionally emits empty / non-numeric
     values for fields like `rightHand`. `_int_optional` (used for
     optional metadata fields like `rightHand` and `pickDirection`)
     falls back to the caller's default instead of raising, so a

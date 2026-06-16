@@ -1,4 +1,4 @@
-"""the source game arrangement XML parser and song data models."""
+"""arrangement XML parser and song data models."""
 
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -88,7 +88,7 @@ class HandShape:
 @dataclass
 class PhraseLevel:
     """One difficulty tier's worth of note/chord/anchor/hand-shape data for a
-    single phrase iteration. the source game's XML stores these as `<level
+    single phrase iteration. the arrangement XML stores these as `<level
     difficulty="N">` blocks that repeat for every difficulty tier the chart
     author wrote; slopsmith used to collapse them to the phrase's
     maxDifficulty and throw the rest away. Keeping them around lets the
@@ -129,7 +129,7 @@ class Arrangement:
     chord_templates: list[ChordTemplate] = field(default_factory=list)
     # None for single-level sources (GP converter, old sloppaks) — frontends
     # should treat a missing `phrases` as "no per-phrase difficulty data
-    # available, disable the slider". Populated from the source game XML when
+    # available, disable the slider". Populated from arrangement XML when
     # multiple `<level>` tiers exist.
     phrases: list[Phrase] | None = None
     # Tone data lifted from the source archive by the sloppak converter and
@@ -681,7 +681,7 @@ def _int_optional(elem, attr, default=-1):
 
     Use for fields that are merely metadata hints (right-hand fingering,
     pick direction, etc.) where a malformed value from a third-party
-    the source game XML emitter shouldn't abort the whole arrangement parse.
+    arrangement XML emitter shouldn't abort the whole arrangement parse.
 
     Required-field readers (`string`, `fret`, `chordId`, …) keep using
     `_int` so a corrupted required attribute still fails fast at parse
@@ -708,7 +708,7 @@ def _bool(elem, attr):
 
 
 def _hand_shape_arpeggio_flag(elem) -> bool:
-    """the source game / EOF may mark arpeggio on ``<handShape>`` (various casings)."""
+    """charts / EOF may mark arpeggio on ``<handShape>`` (various casings)."""
     for attr in ("arpeggio", "Arpeggio", "arp", "Arp"):
         if _bool(elem, attr):
             return True
@@ -716,7 +716,7 @@ def _hand_shape_arpeggio_flag(elem) -> bool:
 
 
 def _chord_template_arpeggio_flag(elem) -> bool:
-    """the source game commonly tags arpeggio templates in ``displayName`` via ``-arp``."""
+    """charts commonly tag arpeggio templates in ``displayName`` via ``-arp``."""
     for attr in ("arpeggio", "Arpeggio", "arp", "Arp"):
         if _bool(elem, attr):
             return True
@@ -766,7 +766,7 @@ def _parse_note(n) -> Note:
 
 
 def parse_arrangement(xml_path: str) -> Arrangement:
-    """Parse a the source game arrangement XML file."""
+    """Parse a chart arrangement XML file."""
     tree = ET.parse(xml_path)
     root = tree.getroot()
 
@@ -1049,7 +1049,7 @@ def parse_arrangement(xml_path: str) -> Arrangement:
             # wrote at or below this phrase's max — these are what the
             # master-difficulty slider selects between at render time.
             # Tiers above max_diff exist in some XMLs (authoring leftovers)
-            # and are skipped to match the source game's in-game behaviour.
+            # and are skipped to match the reference player's behaviour.
             # Capture the extracted slices so the flat max-mastery merge
             # below can reuse one of them.
             phrase_levels: list[PhraseLevel] = []

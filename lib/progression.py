@@ -349,7 +349,7 @@ def instrument_for_arrangement(arr_entry) -> str:
     # arrangements often carry a generic type (lead/rhythm/combo) but have a
     # name like "Keys" or "Piano".  Name overrides the generic type for all
     # well-known non-guitar instruments so that scored keys runs advance the
-    # keys path and quests even when the the source game XML type was not updated.
+    # keys path and quests even when the chart XML type was not updated.
     if "bass" in name:
         return "bass"
     if "drum" in name or "percussion" in name:
