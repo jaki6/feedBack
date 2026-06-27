@@ -1082,7 +1082,7 @@ const _LIB_VIEW_KEY = 'feedBack.libView';
 const _LIB_SORT_KEY = 'feedBack.libSort';
 const _LIB_FORMAT_KEY = 'feedBack.libFormat';
 const _LIB_PROVIDER_KEY = 'feedBack.libProvider';
-const _LIB_VIEW_VALUES = new Set(['grid', 'tree']);
+const _LIB_VIEW_VALUES = new Set(['grid', 'tree', 'folder']);
 const _LIB_SORT_VALUES = new Set([
     'artist', 'artist-desc', 'title', 'title-desc',
     'recent', 'year-desc', 'year', 'tuning',
@@ -1760,8 +1760,20 @@ function setLibView(view) {
     document.getElementById('lib-tree').classList.toggle('hidden', view !== 'tree');
     document.querySelectorAll('.lib-grid-ctrl').forEach(el => el.classList.toggle('hidden', view !== 'grid'));
     document.querySelectorAll('.lib-tree-ctrl').forEach(el => el.classList.toggle('hidden', view !== 'tree'));
+    document.querySelectorAll('.lib-nontree-ctrl').forEach(el => el.classList.toggle('hidden', view === 'tree'));
     document.getElementById('view-grid-btn').className = `px-3 py-2.5 text-sm transition ${view === 'grid' ? 'text-accent-light' : 'text-gray-600 hover:text-gray-400'}`;
     document.getElementById('view-tree-btn').className = `px-3 py-2.5 text-sm transition ${view === 'tree' ? 'text-accent-light' : 'text-gray-600 hover:text-gray-400'}`;
+    // Folder view
+    const folderTreeEl = document.getElementById('lib-folder-tree');
+    if (folderTreeEl) folderTreeEl.classList.toggle('hidden', view !== 'folder');
+    const folderCtrlEl = document.getElementById('lib-folder-controls');
+    if (folderCtrlEl) folderCtrlEl.classList.toggle('hidden', view !== 'folder');
+    // The folder-view toolbar button only exists in the classic (v2) markup;
+    // setLibView also runs at v3 startup where it's absent, so guard it (the
+    // grid/tree buttons above predate this and exist on both paths).
+    const folderBtnEl = document.getElementById('view-folder-btn');
+    if (folderBtnEl) folderBtnEl.className = `px-3 py-2.5 text-sm transition ${view === 'folder' ? 'text-accent-light' : 'text-gray-600 hover:text-gray-400'}`;
+    if (libView === 'folder' && view !== 'folder') window.folderLibrary?.unload?.();
     if (view !== 'grid') stopInfiniteScroll();
     _libEpoch++;
     // View toggle changes which container `_libNavItems` resolves
@@ -1774,10 +1786,31 @@ function setLibView(view) {
 async function loadLibrary(page) {
     if (libView === 'grid') {
         await loadGridPage(page !== undefined ? page : currentPage);
-    } else {
+    } else if (libView === 'tree') {
         await loadTreeView();
+    } else if (libView === 'folder') {
+        if (window.folderLibrary) await window.folderLibrary.load();
+    }
+    // v3 Songs page manages its own view state independently of libView — if
+    // lib-folder-tree is visible, the folder library must also react to filter changes.
+    if (libView !== 'folder' && window.folderLibrary) {
+        const treeEl = document.getElementById('lib-folder-tree');
+        if (treeEl && !treeEl.classList.contains('hidden')) {
+            await window.folderLibrary.load();
+        }
     }
 }
+
+// ── Folder Library: filter bridge ─────────────────────────────────────────
+// Serialises the active lib filter state as URL params so the plugin can pass
+// them to /api/plugins/folder_library/tree — the same pattern grid and tree
+// views use when sending filter params to their own backend endpoints.
+window.feedBackLibFilterParams = function() {
+    var p = new URLSearchParams();
+    _applyLibFiltersToParams(p);
+    return p.toString();
+};
+
 
 async function _fetchJsonOrThrow(url) {
     const resp = await fetch(url);
