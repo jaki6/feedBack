@@ -291,6 +291,16 @@
             // Re-sync the lyrics icon so programmatic highway.setLyricsVisible()
             // (e.g. from lyrics_karaoke) isn't left stale; cheap + idempotent.
             syncLyricsIcon();
+            // Reconcile the edge-driven hover flag against ground truth at
+            // this throttled cadence (~6 Hz, not per frame). Covers both
+            // failure modes of pure mouseenter/mouseleave tracking: a
+            // missed mouseleave (controls hidden/detached under the
+            // pointer → flag stuck true, transport never auto-hides) and
+            // a re-created #player-controls node whose listeners were
+            // lost (flag stuck false-ish / dead). matches(':hover') on a
+            // detached node is simply false, so this also self-clears.
+            const c = $('player-controls');
+            overControls = !!(c && typeof c.matches === 'function' && c.matches(':hover'));
         }
         tickIdle();
         rafId = requestAnimationFrame(loop);

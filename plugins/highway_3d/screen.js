@@ -1236,6 +1236,11 @@
 
     // Binary lower-bound: returns the first index i in arr where arr[i].t >= t.
     // Assumes arr is sorted ascending by .t (bundle.notes / bundle.chords always are).
+    // Byte-identical to core's bundle.lowerBoundT — kept as a local because this
+    // plugin must run on downlevel hosts whose bundles don't carry the helper
+    // (it's called from ~30 sites incl. top-level helpers that don't receive a
+    // bundle). New code that already holds a bundle should prefer
+    // bundle.lowerBoundT / bundle.lowerBoundTime.
     function lowerBoundT(arr, t) {
         let lo = 0, hi = arr.length;
         while (lo < hi) {
@@ -9928,15 +9933,46 @@
             if (mat && mat.map && ren) ren.initTexture(mat.map);
         }
         function _prewarmStatic() {
+            // MAINTENANCE NOTE: this list must cover every deterministic
+            // (chart-independent) material/texture the per-frame paths can
+            // request lazily. Adding a new label style or sprite factory to
+            // drawNote()/update() without warming it here silently
+            // reintroduces a first-appearance texSubImage2D/compile spike
+            // mid-song. Chart-dependent labels (chord names, section names)
+            // live in _prewarmChart.
             try {
                 if (ren && scene && cam) ren.compile(scene, cam);
             } catch (e) { console.warn('[3D-Hwy] prewarm compile:', e); }
             try {
+                // Fret-number labels in the per-frame style/colour combos.
                 for (let f = 0; f <= NFRETS; f++) {
                     _prewarmTex(txtMat(f, FRET_LABEL_GOLD_HEX, false, 'noteFret'));
                     _prewarmTex(txtMat(f, FRET_LABEL_GOLD_HEX, false, 'fretRow'));
                     _prewarmTex(txtMat(f, FRET_LABEL_IDLE_HEX, false, 'fretRow'));
                     _prewarmTex(txtMat(f, '#ffffff', false, 'ghostFret'));
+                }
+                // Teaching marks (drawNote _drawTeachMark): finger hints
+                // T/1-4 (teachFg) and scale degrees 0-11 (teachSd).
+                _prewarmTex(txtMat('T', '#7fd1ff', false, 'teachFg'));
+                for (let i = 1; i <= 4; i++) _prewarmTex(txtMat(String(i), '#7fd1ff', false, 'teachFg'));
+                for (let i = 0; i <= 11; i++) _prewarmTex(txtMat(String(i), '#ffcc66', false, 'teachSd'));
+                // Technique sprite factories (own caches, keyed by packed
+                // number): PM/FH mute X, hammer/pull triangles, bend
+                // chevron stacks, slide direction arrows — per string
+                // colour of the active palette.
+                _prewarmTex(palmMuteXSpriteMat());
+                _prewarmTex(fretHandMuteXSpriteMat());
+                const _nWarm = Math.min(
+                    Math.max(nStr, 6),
+                    (activePalette && activePalette.length) || 0);
+                for (let s = 0; s < _nWarm; s++) {
+                    const hex = activePalette[s] || 0xffffff;
+                    _prewarmTex(triMat(true, hex));
+                    _prewarmTex(triMat(false, hex));
+                    for (let st = 1; st <= 4; st++) _prewarmTex(bendChevronMat(st, hex));
+                    const arrowHex = darkenHex(hex, 0.55);
+                    _prewarmTex(slideArrowMat(true, arrowHex));
+                    _prewarmTex(slideArrowMat(false, arrowHex));
                 }
             } catch (e) { console.warn('[3D-Hwy] prewarm labels:', e); }
         }

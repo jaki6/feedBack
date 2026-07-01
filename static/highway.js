@@ -132,6 +132,11 @@ function createHighway() {
     // Set _domVisSampledFrame to NaN to force a fresh sample on the next
     // check (done on init, canvas replace, resize, and override-clear so
     // deliberate transitions don't wait out the throttle window).
+    // NOTE those manual resets are LATENCY optimizations, not correctness
+    // requirements: the periodic re-sample runs every _DOM_VIS_CHECK_FRAMES
+    // frames regardless, so a visibility-affecting path that forgets to
+    // reset self-heals within ~10 frames — stale visibility can never be
+    // served indefinitely.
     const _DOM_VIS_CHECK_FRAMES = 10;
     let _domVisCached = false;
     let _domVisSampledFrame = NaN;
@@ -3845,6 +3850,12 @@ function createHighway() {
         // can call this once to sync their initial state — the event
         // is transition-only and won't re-fire for late subscribers.
         isVisible() {
+            // Force a fresh DOM sample — this is a documented "live DOM
+            // check" for late subscribers seeding initial state, so it
+            // must not serve the rAF loop's throttled cache (up to
+            // ~166 ms stale). Called rarely; the layout-read cost that
+            // motivated the throttle only matters per-frame.
+            _domVisSampledFrame = NaN;
             return _isHighwayVisible();
         },
         getNotes() { return notes; },
