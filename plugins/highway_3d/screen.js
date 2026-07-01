@@ -1837,7 +1837,13 @@
             o.value = pk; o.textContent = reg[pk].label;
             _aspectTargetSel.appendChild(o);
         });
-        if (_aspectEditTarget && !reg[_aspectEditTarget]) _aspectEditTarget = '';
+        // Force the edit target back to "All" when the Target row is hidden
+        // (single pane) or the selected pane is gone — otherwise a stale pane
+        // target would silently route edits into a hidden (and persistent
+        // arr:*) override in single-player.
+        if (keys.length <= 1 || (_aspectEditTarget && !reg[_aspectEditTarget])) {
+            _aspectEditTarget = '';
+        }
         _aspectTargetSel.value = _aspectEditTarget;
         // The Target row only matters with more than one pane (a split). With a
         // single pane there's nothing to disambiguate, so hide it.

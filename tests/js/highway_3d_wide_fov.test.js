@@ -235,6 +235,14 @@ test('pruning drops the matching readout slot and a dangling __last', () => {
     );
 });
 
+test('single-pane forces the edit target back to All (no hidden pane edits)', () => {
+    assert.match(
+        src,
+        /if\s*\(\s*keys\.length\s*<=\s*1\s*\|\|\s*\(\s*_aspectEditTarget\s*&&\s*!reg\[_aspectEditTarget\]\s*\)\s*\)\s*\{\s*_aspectEditTarget\s*=\s*''/,
+        '_aspectBuildTargets must reset the edit target to "" when the Target row is hidden',
+    );
+});
+
 test('the panel has a dismiss (close) control', () => {
     assert.match(
         src,
