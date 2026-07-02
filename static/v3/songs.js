@@ -57,6 +57,8 @@
     const state = {
         provider: 'local', view: 'grid', sort: 'artist', format: '', q: '',
         artist: '', album: '',
+        grouping: true,     // one card per song (multi-chart grouping); persisted
+
         filters: { arr_has: [], arr_lacks: [], stem_has: [], stem_lacks: [], lyrics: '', tunings: [], mastery: [] },
         page: 0, total: 0, loading: false, built: false, accuracy: {}, tuningNames: [],
         artistCatalog: [], renderedHash: '',
@@ -149,6 +151,7 @@
         if (SORTS.some(([v]) => v === saved.sort)) state.sort = saved.sort;
         if (FORMATS.some(([v]) => v === saved.format)) state.format = saved.format;
         if (saved.view === 'grid' || saved.view === 'tree' || saved.view === 'folder') state.view = saved.view;
+        if (typeof saved.grouping === 'boolean') state.grouping = saved.grouping;
         const f = saved.filters;
         if (f && typeof f === 'object') {
             const arr = (x) => (Array.isArray(x) ? x.slice() : []);
@@ -167,6 +170,7 @@
             const f = state.filters;
             localStorage.setItem(PREFS_KEY, JSON.stringify({
                 sort: state.sort, format: state.format, view: state.view,
+                grouping: state.grouping !== false,
                 filters: {
                     arr_has: [...f.arr_has], arr_lacks: [...f.arr_lacks],
                     stem_has: [...f.stem_has], stem_lacks: [...f.stem_lacks],
@@ -227,6 +231,20 @@
         if (!tree) return false;
         return !!(tree.querySelector('[data-fn]') || tree.querySelector('details'));
     }
+
+    // ── Multi-chart grouping (P5c, design §7.1) ─────────────────────────────
+    // The grid queries with group=1 so charts of the same work collapse to ONE
+    // card — the representative (preferred/auto-pick) chart — with rows carrying
+    // chart_count + work_key from the materialized work_display read-model
+    // (P5a/P5b). group must ride BOTH the page fetch and the rail's stats fetch
+    // so page, total and sort_letters all count works identically — a
+    // works-vs-charts mismatch would break the rail's cumulative-seek math and
+    // the sizer geometry. Grouping is default-ON per the design, with a
+    // persisted toggle in the filter drawer (P5e) — OFF falls back to today's
+    // one-card-per-chart. Only the local provider implements group=; smart
+    // collections and remote providers ignore it and stay flat (their rows
+    // then carry no chart_count, so no ⚑ chips render).
+    function groupingActive() { return state.grouping !== false; }
 
     function queryParams(extra, opts) {
         const f = state.filters;
@@ -660,6 +678,19 @@
             '<button data-arr="' + esc(a.index != null ? a.index : '') + '" title="Play ' + esc(a.name) + '" class="text-[10px] px-1.5 py-0.5 rounded bg-gray-800/60 text-fb-textDim hover:bg-fb-primary hover:text-white transition">' + esc(a.name) + '</button>').join('');
     }
 
+    // ⚑ multi-chart chip (P5c, design §7.1): the persistent "other versions
+    // exist" cue on a grouped card. Rendered ONLY when the grouped query says
+    // this card stands for 2+ charts of one work (chart_count = work_display
+    // group_size, P5a) — a single-chart card emits nothing, so its markup stays
+    // byte-identical to an ungrouped card. First in the chip row + shrink-0 so
+    // the overflow-hidden row clips arrangement chips before it ever clips the
+    // cue. Clicking it opens the Charts drawer (see wireCards).
+    function chartsChipHtml(song) {
+        const n = song.chart_count;
+        if (!(n >= 2) || !song.work_key) return '';
+        return '<button data-charts="' + esc(song.work_key) + '" title="' + n + ' charts of this song" aria-label="' + n + ' charts of this song" class="shrink-0 text-[10px] px-1.5 py-0.5 rounded bg-fb-primary/15 text-fb-primary border border-fb-primary/40 hover:bg-fb-primary hover:text-white transition">⚑ ' + n + ' charts</button>';
+    }
+
     // ── Tuning-match flags (working-tuning PR 6) ───────────────────────────────
     // Colour each song's tuning chip by whether your CURRENT working tuning covers
     // it: green = play it now, amber = needs a retune. Uses the tuner plugin's
@@ -698,16 +729,22 @@
     function songCard(song) {
         const fav = song.favorite;
         const key = cardKey(song);
+        // §7.1 display-chart switch (P5e): under a chart-intrinsic filter the
+        // server may attach `display_chart` — the member that MATCHES the
+        // filter when the representative doesn't. The card SHOWS and PLAYS
+        // that chart, while the row identity (sort keys, data-fn, the
+        // accuracy/heart anchor = the preferred chart) stays the rep's.
+        const shown = song.display_chart ? Object.assign({}, song, song.display_chart) : song;
         // In select mode the checkbox occupies top-2 left-2, so shift the
         // tuning chip right (left-9) to avoid overlapping it.
         const tuningLabel = (typeof window.displayTuningName === 'function')
-            ? window.displayTuningName(song.tuning_name || song.tuning)
-            : (song.tuning_name || '');
+            ? window.displayTuningName(shown.tuning_name || shown.tuning)
+            : (shown.tuning_name || '');
         let tuning = '';
         if (tuningLabel) {
             const rawOffsets = (typeof window.parseRawTuningOffsets === 'function')
-                ? (window.parseRawTuningOffsets(song.tuning_offsets)
-                    || window.parseRawTuningOffsets(song.tuning_name || song.tuning))
+                ? (window.parseRawTuningOffsets(shown.tuning_offsets)
+                    || window.parseRawTuningOffsets(shown.tuning_name || shown.tuning))
                 : null;
             const targetNotes = (tuningLabel === 'Custom Tuning' && rawOffsets
                 && typeof window.displayTuningTargets === 'function')
@@ -722,7 +759,7 @@
             // Also flag a bass-only song (every arrangement is a bass part) so coverage
             // scores its bass tuning against the bass base pitches, not guitar — otherwise
             // a 4-string bass tuning read as guitar can false-match a guitar player.
-            const chipArrs = song.arrangements || [];
+            const chipArrs = shown.arrangements || [];
             const chipIsBass = chipArrs.length > 0
                 && chipArrs.every((a) => /\bbass\b/i.test((a && a.name) || ''));
             const matchAttr = (rawOffsets && rawOffsets.length)
@@ -740,7 +777,8 @@
         const checkbox = state.selectMode
             ? '<input type="checkbox" data-select class="absolute top-2 left-2 z-20 w-5 h-5 accent-fb-primary pointer-events-none"' + (state.selected.has(key) ? ' checked' : '') + '>'
             : '';
-        const arrChips = arrChipsHtml(song);
+        const arrChips = arrChipsHtml(shown);
+        const chartsChip = chartsChipHtml(song);
         // Plugin-contributed card actions placed 'inline' (in the hover action
         // row) or 'overlay' (centered over the art). Menu-placed actions live in
         // the ⋮ menu (openCardMenu); rendering these here means plugins using
@@ -765,20 +803,20 @@
         const selRing = state.selected.has(key) ? ' ring-2 ring-fb-primary' : '';
         return '<div class="group relative" data-fn="' + esc(key) + '" data-letter="' + esc(songBucket(song)) + '" data-library-song="' + esc(songId(song)) + '" data-library-provider="' + esc(state.provider) + '">' +
             '<div class="relative aspect-square rounded-lg overflow-hidden bg-fb-card cursor-pointer' + selRing + '" data-v3-play>' +
-            '<img src="' + esc(artUrl(song)) + '" alt="" loading="lazy" decoding="async" class="w-full h-full object-cover transition-transform duration-300 group-hover:scale-105" onerror="this.style.visibility=\'hidden\'">' +
-            tuning + checkbox + accuracyBadge(key) + fmtBadge(song) + personalBadges(song) + overlay +
+            '<img src="' + esc(artUrl(shown)) + '" alt="" loading="lazy" decoding="async" class="w-full h-full object-cover transition-transform duration-300 group-hover:scale-105" onerror="this.style.visibility=\'hidden\'">' +
+            tuning + checkbox + accuracyBadge(key) + fmtBadge(shown) + personalBadges(song) + overlay +
             '<div class="absolute top-2 right-2 flex gap-1 opacity-0 group-hover:opacity-100 transition">' +
             inlineBtns +
             '<button data-fav title="Favorite" aria-label="Favorite" aria-pressed="' + (fav ? 'true' : 'false') + '" class="w-7 h-7 rounded-full bg-black/50 hover:bg-black/70 flex items-center justify-center text-sm ' + (fav ? 'text-fb-accent' : 'text-white') + '">' + (fav ? '♥' : '♡') + '</button>' +
             '<button data-save title="Save for later" aria-label="Save for later" class="w-7 h-7 rounded-full bg-black/50 hover:bg-black/70 flex items-center justify-center text-white text-sm">🔖</button>' +
             '<button data-menu title="More" aria-label="More actions" class="w-7 h-7 rounded-full bg-black/50 hover:bg-black/70 flex items-center justify-center text-white text-sm leading-none">⋮</button>' +
             '</div></div>' +
-            '<div class="mt-1 text-sm text-fb-text truncate" title="' + esc(song.title) + '">' + esc(song.title) + '</div>' +
+            '<div class="mt-1 text-sm text-fb-text truncate" title="' + esc(shown.title) + '">' + esc(shown.title) + '</div>' +
             '<div class="text-xs text-fb-textDim truncate">' + esc(song.artist) + '</div>' +
             // Always emit the chip row (even when empty) at a FIXED single-line
             // height — uniform card height is what makes the windowed grid's
             // absolute-position math exact (.v3-card-chips in v3.css).
-            '<div class="v3-card-chips flex gap-1 mt-1">' + arrChips + '</div>' +
+            '<div class="v3-card-chips flex gap-1 mt-1">' + chartsChip + arrChips + '</div>' +
             '</div>';
     }
 
@@ -796,8 +834,23 @@
         const items = (reg ? reg.list(song) : []).filter((a) => !a.placement || a.placement === 'menu');
         const menu = document.createElement('div');
         menu.className = 'v3-card-menu absolute top-10 right-2 z-30 min-w-[10rem] bg-fb-card border border-fb-border/60 rounded-lg shadow-xl py-1 text-sm';
+        // Multi-chart entries (P5d): a grouped grid row carries chart_count +
+        // work_key (P5a annotation), so the menu knows inline whether this card
+        // stands for versions. Local library only — the work API is local.
+        const canCharts = state.provider === 'local' && song.work_key && song.chart_count >= 2;
+        // Play follows the DISPLAYED chart (see wireCards) — under an intrinsic
+        // filter that's the matching member, not the representative.
+        const playTarget = song.display_chart ? Object.assign({}, song, song.display_chart) : song;
         const rows = [
-            { id: '__play', label: 'Play', run: () => { _saveLibraryScrollSnapshot(); window.playSong && window.playSong(enc(song.filename)); } },
+            { id: '__play', label: 'Play', run: () => { _saveLibraryScrollSnapshot(); window.playSong && window.playSong(enc(playTarget.filename)); } },
+            ...(canCharts ? [
+                { id: '__charts', label: 'Charts (' + song.chart_count + ')…' },
+                { id: '__playver', label: 'Play version ▸' },
+            ] : []),
+            // Undo for the drawer's "Split out" (P5e) — a split chart is its
+            // own singleton card (no ⚑ chip), so this is its only way back.
+            ...(state.provider === 'local' && song.is_split
+                ? [{ id: '__unsplit', label: 'Rejoin other versions' }] : []),
             { id: '__playlist', label: 'Add to playlist' },
             ...items.map((a) => ({ id: a.id, label: a.label, destructive: a.destructive, enabled: a.enabled, plugin: a.pluginId })),
         ];
@@ -816,13 +869,279 @@
         menu.querySelectorAll('[data-act]').forEach((b) => b.addEventListener('click', async (e) => {
             e.stopPropagation();
             const id = b.getAttribute('data-act');
+            // 'Play version ▸' swaps THIS menu's rows for the work's charts —
+            // it must expand in place, so it's the one entry that doesn't close.
+            if (id === '__playver') { await _expandPlayVersions(menu, song, closeMenu); return; }
             closeMenu();
-            if (id === '__play') { playCard(song); return; }
+            if (id === '__play') { playCard(playTarget); return; }
+            if (id === '__charts') { openChartsDrawer(song.work_key, song); return; }
+            if (id === '__unsplit') {
+                if (await jsend('POST', '/api/chart/' + enc(song.filename) + '/unsplit')) _groupChanged();
+                return;
+            }
             if (id === '__playlist') { await addFilenamesToPlaylist([song.filename]); return; }
             if (reg) await reg.run(id, song, { source: 'v3-songs' });
         }));
+        // Tree rows ride the (ungrouped) artists endpoint, so they don't carry
+        // chart_count/work_key — resolve the work lazily and slot a
+        // "Charts (N)…" entry into the still-open menu when versions exist.
+        // Grid rows already carry both (chart_count defined ⇒ no fetch).
+        if (state.provider === 'local' && song.chart_count === undefined && song.filename) {
+            jget('/api/chart/' + enc(song.filename) + '/work').then((w) => {
+                if (!w || !menu.isConnected) return;
+                const addEntry = (label, run) => {
+                    const b = document.createElement('button');
+                    b.className = 'w-full text-left px-3 py-1.5 hover:bg-fb-card/60 text-fb-text';
+                    b.textContent = label;
+                    b.addEventListener('click', (e) => { e.stopPropagation(); closeMenu(); run(); });
+                    menu.appendChild(b);
+                };
+                if (w.chart_count >= 2 && w.work_key) {
+                    addEntry('Charts (' + w.chart_count + ')…', () => openChartsDrawer(w.work_key, song));
+                }
+                if (w.is_split) {
+                    addEntry('Rejoin other versions', async () => {
+                        if (await jsend('POST', '/api/chart/' + enc(song.filename) + '/unsplit')) _groupChanged();
+                    });
+                }
+            });
+        }
         setTimeout(() => document.addEventListener('click', closer), 0);
     }
+
+    // 'Play version ▸' (P5d): swap the ⋮ menu's rows for the work's charts;
+    // picking one plays that chart directly. A one-off alternate play — the
+    // keeper/headline doesn't move (stats record to the played chart's own
+    // filename), which is the design's "casual try ≠ deliberate adopt".
+    async function _expandPlayVersions(menu, song, closeMenu) {
+        const data = await jget('/api/work/' + enc(song.work_key) + '/charts');
+        if (!data || !Array.isArray(data.charts) || !data.charts.length || !menu.isConnected) return;
+        menu.innerHTML = data.charts.map((c) => {
+            const tl = (typeof window.displayTuningName === 'function')
+                ? window.displayTuningName(c.tuning_name || c.tuning) : (c.tuning_name || '');
+            return '<button data-ver="' + esc(c.filename) + '" title="' + esc(c.filename) + '" class="w-full text-left px-3 py-1.5 hover:bg-fb-card/60 text-fb-text">' +
+                (c.is_representative ? '<span class="text-fb-primary">●</span> ' : '') + esc(c.title) +
+                (tl ? '<span class="text-[10px] text-fb-textDim ml-1">' + esc(tl) + '</span>' : '') +
+                '</button>';
+        }).join('');
+        menu.querySelectorAll('[data-ver]').forEach((vb) => vb.addEventListener('click', (e) => {
+            e.stopPropagation();
+            const fn = vb.getAttribute('data-ver');
+            closeMenu();
+            _saveLibraryScrollSnapshot();
+            if (window.playSong) window.playSong(enc(fn));
+        }));
+    }
+
+    // ── Charts drawer (P5d, design §7.1 UX-2/3) ────────────────────────────────
+    // The single deep-management surface for a work's charts. A body-appended
+    // slide-in panel (the filter-drawer idiom; body-appended like the playlist
+    // picker so it opens from any view) listing every chart of the work as a
+    // radiogroup — the checked row is the keeper the grid card plays. Clicking
+    // an unchecked row (or Enter/Space on it) = Set as preferred, one tap;
+    // "Reset to auto pick" appears when the keeper is your explicit pick.
+    // Writes go through the work-charts API and the drawer re-renders from the
+    // response (there's no server-side library event bus — the drawer is its
+    // own refresh); the grid re-fetches because the representative may have
+    // flipped. Global mode only — the slot-scoped (curated-album) mode is P6;
+    // the per-row Split escape hatch is P5e.
+    let _chartsPrevFocus = null;   // focus to restore when the drawer closes
+
+    function _chartsDrawerEls() {
+        let ov = document.getElementById('v3-charts-overlay');
+        let dr = document.getElementById('v3-charts-drawer');
+        if (!ov) {
+            ov = document.createElement('div');
+            ov.id = 'v3-charts-overlay';
+            ov.className = 'fixed inset-0 bg-black/50 z-40 hidden';
+            ov.addEventListener('click', closeChartsDrawer);
+            document.body.appendChild(ov);
+        }
+        if (!dr) {
+            dr = document.createElement('aside');
+            dr.id = 'v3-charts-drawer';
+            dr.className = 'fixed top-0 right-0 h-full w-full sm:w-96 bg-fb-sidebar border-l border-fb-border/50 z-50 transform translate-x-full transition-transform duration-200 overflow-y-auto v3-scroll';
+            dr.setAttribute('role', 'dialog');
+            dr.setAttribute('aria-modal', 'true');
+            dr.setAttribute('aria-label', 'Charts of this song');
+            // a11y: Escape closes; Tab is trapped inside the open drawer
+            // (aria-modal alone doesn't trap for keyboard users); ArrowUp/Down
+            // move focus between the chart rows (focus only — selection stays
+            // on Enter/Space, since a native-radio "arrow = select" would fire
+            // a preferred write on every keystroke).
+            dr.addEventListener('keydown', (e) => {
+                if (e.key === 'Escape') { e.preventDefault(); closeChartsDrawer(); return; }
+                if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+                    const rows = [...dr.querySelectorAll('[role="radio"]')];
+                    if (!rows.length) return;
+                    const i = rows.indexOf(document.activeElement);
+                    if (i === -1) return;
+                    e.preventDefault();
+                    rows[(i + (e.key === 'ArrowDown' ? 1 : rows.length - 1)) % rows.length].focus();
+                    return;
+                }
+                if (e.key !== 'Tab') return;
+                const foci = dr.querySelectorAll('button, [tabindex]:not([tabindex="-1"])');
+                if (!foci.length) return;
+                const first = foci[0], last = foci[foci.length - 1];
+                if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+                else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+            });
+            document.body.appendChild(dr);
+        }
+        return { ov: ov, dr: dr };
+    }
+
+    // One chart row. `checked` = the current keeper (pref or auto-pick). The
+    // filename line is deliberate: duplicate charts usually share title/artist,
+    // so the pack filename is often the only human-readable distinguisher.
+    function _chartRowHtml(c, data) {
+        const checked = c.is_representative;
+        const prefLabel = checked
+            ? (data.preferred_source === 'user' ? 'Preferred — your pick' : 'Preferred (auto)')
+            : '';
+        const tuningLabel = (typeof window.displayTuningName === 'function')
+            ? window.displayTuningName(c.tuning_name || c.tuning)
+            : (c.tuning_name || '');
+        const meta = [fmtLabel(c), tuningLabel,
+            (c.arrangements || []).map((a) => a.name).join('/'),
+            c.year ? String(c.year) : '']
+            .filter(Boolean).join(' · ');
+        const acc = (typeof c.best_accuracy === 'number')
+            ? '<span class="font-bold ' + (c.best_accuracy >= MASTERY_ACCURACY ? 'text-fb-good' : c.best_accuracy >= 0.5 ? 'text-fb-mid' : 'text-fb-low') + '">' + Math.round(c.best_accuracy * 100) + '%</span>'
+            : '<span class="text-fb-textDim/60">not played</span>';
+        return '<div role="radio" aria-checked="' + (checked ? 'true' : 'false') + '" tabindex="0" data-ch="' + esc(c.filename) + '"' +
+            ' title="' + (checked ? esc(prefLabel) : 'Make this the preferred chart') + '"' +
+            ' class="border rounded-lg p-3 cursor-pointer transition ' + (checked ? 'border-fb-primary/60 bg-fb-primary/5' : 'border-fb-border/40 hover:border-fb-border') + '">' +
+            '<div class="flex items-start justify-between gap-2">' +
+              '<div class="min-w-0">' +
+                '<div class="text-sm text-fb-text truncate" title="' + esc(c.title) + '">' + esc(c.title) + '</div>' +
+                '<div class="text-xs text-fb-textDim truncate">' + esc(meta) + ' · ' + acc + '</div>' +
+                '<div class="text-[10px] text-fb-textDim/60 truncate" title="' + esc(c.filename) + '">' + esc(c.filename) + '</div>' +
+                (prefLabel ? '<div class="text-[10px] font-semibold text-fb-primary mt-0.5">' + esc(prefLabel) + '</div>' : '') +
+              '</div>' +
+              '<button data-ch-play title="Play this chart" aria-label="Play this chart" class="shrink-0 w-8 h-8 rounded-full bg-fb-primary hover:bg-fb-primaryHi text-white text-sm leading-none">▶</button>' +
+            '</div>' +
+            '<div class="flex gap-2 mt-2">' +
+              '<button data-ch-pl class="text-xs px-2 py-1 rounded border border-fb-border/50 text-fb-textDim hover:text-fb-text">＋ Playlist</button>' +
+              // Split escape hatch (P5e, §7.1): "these aren't the same song".
+              // Only offered while the work still has 2+ charts — splitting the
+              // last member is meaningless. Undo lives in the split-out card's
+              // ⋮ menu ("Rejoin other versions").
+              (data.count >= 2
+                ? '<button data-ch-split title="These aren\'t the same song — give this chart its own card" class="text-xs px-2 py-1 rounded border border-fb-border/50 text-fb-textDim hover:text-fb-accent hover:border-fb-accent/50">Split out</button>'
+                : '') +
+            '</div>' +
+            '</div>';
+    }
+
+    // A preferred/auto flip can change which chart the grid's card stands for —
+    // re-fetch the grid in place (scroll preserved; renderWindow refills from
+    // the current scrollTop). The tree lists every chart flat, so it's
+    // unaffected; rare curate action, so a full re-fetch is fine.
+    function _groupChanged() {
+        if (state.view === 'grid' && groupingActive()) loadGrid(true);
+    }
+
+    function _renderChartsDrawer(data, opts) {
+        const els = _chartsDrawerEls();
+        const dr = els.dr;
+        const head = data.charts.find((c) => c.is_representative) || data.charts[0];
+        // Mastery-anchor heads-up (§7.1): shown once, ambiently, right after a
+        // switch — the headline may drop because history stays with each chart
+        // (motor mastery is arrangement-specific). Text only, no toast/sound.
+        const switchNote = (opts && opts.switched)
+            ? '<div class="text-[11px] text-fb-primary/90 border border-fb-primary/30 rounded-md px-2 py-1.5">Practice history stays with each chart — your new pick starts from its own stats.</div>'
+            : '';
+        dr.innerHTML =
+            '<div class="p-5 space-y-4">' +
+              '<div class="flex items-start justify-between gap-2">' +
+                '<div class="min-w-0">' +
+                  '<h3 class="text-lg font-semibold text-fb-text truncate" title="' + esc(head.title) + '">' + esc(head.title) + '</h3>' +
+                  '<div class="text-xs text-fb-textDim truncate">' + esc(head.artist) + ' · ' + data.count + ' chart' + (data.count === 1 ? '' : 's') + '</div>' +
+                '</div>' +
+                '<button data-charts-close aria-label="Close" class="text-fb-textDim hover:text-fb-text text-xl leading-none">✕</button>' +
+              '</div>' +
+              switchNote +
+              '<div role="radiogroup" aria-label="Charts of this song" class="space-y-2">' +
+                data.charts.map((c) => _chartRowHtml(c, data)).join('') +
+              '</div>' +
+              (data.preferred_source === 'user'
+                ? '<button data-charts-auto class="w-full text-sm text-fb-textDim hover:text-fb-text border border-fb-border/50 rounded-md py-2">Reset to auto pick</button>'
+                : '<div class="text-[11px] text-fb-textDim">Auto pick sticks with a chart you\'ve practised; otherwise most complete → newest. Tap a chart to pin your keeper.</div>') +
+            '</div>';
+
+        dr.querySelector('[data-charts-close]').addEventListener('click', closeChartsDrawer);
+        dr.querySelector('[data-charts-auto]')?.addEventListener('click', async () => {
+            const fresh = await jsend('DELETE', '/api/work/' + enc(data.work_key) + '/preferred');
+            if (!fresh) return;
+            _renderChartsDrawer(fresh);
+            _groupChanged();
+            dr.querySelector('[role="radio"][aria-checked="true"]')?.focus();
+        });
+        dr.querySelectorAll('[data-ch]').forEach((row) => {
+            const fn = row.getAttribute('data-ch');
+            const setPreferred = async () => {
+                if (row.getAttribute('aria-checked') === 'true') return;   // already the keeper
+                const fresh = await jsend('PUT', '/api/work/' + enc(data.work_key) + '/preferred', { filename: fn });
+                if (!fresh) return;
+                _renderChartsDrawer(fresh, { switched: true });
+                _groupChanged();
+                dr.querySelector('[role="radio"][aria-checked="true"]')?.focus();
+            };
+            row.addEventListener('click', setPreferred);
+            row.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setPreferred(); }
+            });
+            row.querySelector('[data-ch-play]')?.addEventListener('click', (e) => {
+                e.stopPropagation();
+                closeChartsDrawer();
+                _saveLibraryScrollSnapshot();
+                if (window.playSong) window.playSong(enc(fn));
+            });
+            row.querySelector('[data-ch-pl]')?.addEventListener('click', (e) => {
+                e.stopPropagation();
+                addFilenamesToPlaylist([fn]);
+            });
+            row.querySelector('[data-ch-split]')?.addEventListener('click', async (e) => {
+                e.stopPropagation();
+                const ok = await jsend('POST', '/api/chart/' + enc(fn) + '/split');
+                if (!ok) return;
+                _groupChanged();
+                // Re-read the ORIGINAL work — the split chart is gone from it
+                // (now its own card in the grid; its ⋮ menu offers the rejoin).
+                const fresh = await jget('/api/work/' + enc(data.work_key) + '/charts');
+                if (fresh && Array.isArray(fresh.charts) && fresh.charts.length) _renderChartsDrawer(fresh);
+                else closeChartsDrawer();
+            });
+        });
+    }
+
+    async function openChartsDrawer(workKey, _song) {
+        if (!workKey) return;
+        const data = await jget('/api/work/' + enc(workKey) + '/charts');
+        if (!data || !Array.isArray(data.charts) || !data.charts.length) return;
+        const els = _chartsDrawerEls();
+        _chartsPrevFocus = document.activeElement;
+        _renderChartsDrawer(data);
+        els.ov.classList.remove('hidden');
+        els.dr.classList.remove('translate-x-full');
+        els.dr.querySelector('[role="radio"][aria-checked="true"]')?.focus();
+    }
+
+    function closeChartsDrawer() {
+        document.getElementById('v3-charts-overlay')?.classList.add('hidden');
+        document.getElementById('v3-charts-drawer')?.classList.add('translate-x-full');
+        if (_chartsPrevFocus && typeof _chartsPrevFocus.focus === 'function' && _chartsPrevFocus.isConnected) {
+            _chartsPrevFocus.focus();
+        }
+        _chartsPrevFocus = null;
+    }
+
+    // Global opener — the ⚑ chip routes through this, and other views/plugins
+    // (P2's details drawer, dashboards) can open the drawer without reaching
+    // into this module.
+    window.__fbOpenChartsDrawer = openChartsDrawer;
 
     function wireCards(scope) {
         scope.querySelectorAll('[data-fn]').forEach((el) => {
@@ -830,16 +1149,28 @@
             el.dataset.wired = '1';
             const fn = el.getAttribute('data-fn');
             const song = state.songsById[fn] || { filename: fn };
+            // §7.1: when a chart-intrinsic filter attached a display_chart,
+            // the card SHOWS that member — so play actions target it too
+            // (its arrangement indices match the rendered chips). Identity
+            // actions (heart/save/playlist/menu registry) stay on the rep row.
+            const playTarget = song.display_chart ? Object.assign({}, song, song.display_chart) : song;
             el.querySelectorAll('[data-v3-play]').forEach((pe) => pe.addEventListener('click', (e) => {
                 if (state.selectMode) { e.preventDefault(); toggleSelect(fn, el); return; }
-                playCard(song);   // local → play; unsynced remote → sync then play
+                playCard(playTarget);   // local → play; unsynced remote → sync then play
             }));
             el.querySelector('[data-menu]')?.addEventListener('click', (e) => { e.stopPropagation(); openCardMenu(el, song, e.currentTarget); });
             el.querySelectorAll('[data-arr]').forEach((ab) => ab.addEventListener('click', (e) => {
                 e.stopPropagation();
                 const idx = ab.getAttribute('data-arr');
-                playCard(song, idx === '' ? undefined : Number(idx));
+                playCard(playTarget, idx === '' ? undefined : Number(idx));
             }));
+            // ⚑ charts chip → the Charts drawer (P5d). Never a card play — the
+            // chip row sits outside [data-v3-play]; stopPropagation is
+            // belt-and-braces.
+            el.querySelector('[data-charts]')?.addEventListener('click', (e) => {
+                e.stopPropagation();
+                openChartsDrawer(e.currentTarget.getAttribute('data-charts'), song);
+            });
             el.querySelector('[data-fav]')?.addEventListener('click', async (e) => {
                 e.stopPropagation();
                 const btn = e.currentTarget;
@@ -1234,6 +1565,7 @@
         const epoch = state.epoch;
         const prom = (async () => {
             const extra = { size: PAGE_SIZE };
+            if (groupingActive()) extra.group = 1;
             const prevCursor = state.keysetOk ? state.pageCursors[p - 1] : null;
             if (prevCursor) extra.after = prevCursor; else extra.page = p;
             const data = await jget('/api/library?' + queryParams(extra).toString());
@@ -1414,7 +1746,11 @@
         // Present letters for the active sort+filter (filter-synced; counts
         // songs). `sort_letters=1` opts into the active-sort breakdown so the
         // dashboard / v2 tree (which read only `letters`) skip the extra query.
-        const stats = await jget('/api/library/stats?' + queryParams({ sort_letters: 1 }).toString());
+        // group must MATCH the grid's page fetches (see groupingActive) so the
+        // rail's per-letter counts sum to the same works total the sizer uses.
+        const railParams = { sort_letters: 1 };
+        if (groupingActive()) railParams.group = 1;
+        const stats = await jget('/api/library/stats?' + queryParams(railParams).toString());
         if (_railToken !== myToken || !railVisible()) {                 // changed mid-fetch
             if (_railToken === myToken) rail.classList.add('hidden');
             return;
@@ -1708,6 +2044,15 @@
                 }
                 return triPill('tuning', val, label + ' (' + t.count + ')', f.tunings.includes(val) ? 'has' : 'any');
             }).join('') || '<span class="text-xs text-fb-textDim">No tunings</span>') +
+            // Multi-chart grouping toggle (P5e) — a VIEW mode, not a filter
+            // (never counted in the badge, never saved into collection rules).
+            // Local provider only: it's the one that implements group=.
+            (state.provider === 'local'
+                ? section('Grouping', '<button data-grouping class="px-2 py-1 rounded-md text-xs border ' +
+                    (state.grouping !== false ? 'bg-fb-primary text-white border-fb-primary' : 'bg-gray-800/50 text-fb-textDim border-gray-700') +
+                    '" title="Collapse charts of the same song to one card (the ⚑ chip lists the versions)">' +
+                    (state.grouping !== false ? '✓ ' : '') + 'One card per song</button>')
+                : '') +
             // Collections always replay against the LOCAL library, so only offer
             // "save" when browsing local with a non-empty filter set.
             (state.provider === 'local' && Object.keys(currentFilterRules()).length
@@ -1730,6 +2075,11 @@
         }));
         d.querySelectorAll('[data-lyrics]').forEach((b) => b.addEventListener('click', () => { f.lyrics = b.getAttribute('data-lyrics'); renderDrawer(); }));
         d.querySelectorAll('[data-mastery]').forEach((b) => b.addEventListener('click', () => { const v = b.getAttribute('data-mastery'); const i = f.mastery.indexOf(v); if (i >= 0) f.mastery.splice(i, 1); else f.mastery.push(v); renderDrawer(); }));
+        d.querySelector('[data-grouping]')?.addEventListener('click', () => {
+            state.grouping = !(state.grouping !== false);
+            renderDrawer();
+            reload();     // re-fetches grid + rail with/without group=1, saves prefs
+        });
         d.querySelector('[data-drawer-save]')?.addEventListener('click', saveCurrentAsCollection);
         d.querySelector('[data-drawer-tidy]')?.addEventListener('click', openArtistTidyUp);
         d.querySelector('[data-drawer-close]')?.addEventListener('click', closeDrawer);
