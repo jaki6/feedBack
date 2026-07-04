@@ -6320,15 +6320,30 @@ def _mb_http_get(path: str, params: dict) -> dict | None:
 
 
 def _mb_search_recordings(artist, title, limit: int = 12) -> list[dict]:
-    """Text search (tier 2–4): denoised Lucene query over /recording. The query
-    now drops live-only recordings and our ranker rewards the studio take, so a
+    """Text search (tier 2–4): denoised Lucene query over /recording. The strict
+    query drops live-only recordings and the ranker rewards the studio take, so a
     slightly larger default result set gives the re-ranker room to surface the
-    canonical version (one request per song regardless of limit)."""
+    canonical version.
+
+    Runs the strict field-phrase query first (high precision); if it finds
+    nothing, retries ONCE with a loose term query. The strict phrase only matches
+    MusicBrainz's *primary* artist/title, so a recording stored under a non-Latin
+    primary name (大橋純子) whose romanized form ("Junko Ohashi") is only an alias
+    is invisible to it — the loose query searches aliases and rescues it. The
+    retry spends a second throttled request only on a miss; results are re-scored
+    by rank_candidates, so the looser recall doesn't lower match quality
+    (auto-accept still needs the per-field floors)."""
     query = mb_match.build_recording_query(artist, title)
-    if not query:
-        return []
-    body = _mb_http_get("recording", {"query": query, "limit": limit})
-    return mb_match.parse_search_response(body or {})
+    cands: list[dict] = []
+    if query:
+        body = _mb_http_get("recording", {"query": query, "limit": limit})
+        cands = mb_match.parse_search_response(body or {})
+    if not cands:
+        loose = mb_match.build_recording_query(artist, title, loose=True)
+        if loose and loose != query:
+            body = _mb_http_get("recording", {"query": loose, "limit": limit})
+            cands = mb_match.parse_search_response(body or {})
+    return cands
 
 
 # ── AcoustID audio fingerprinting (content-based identification) ──────────────
