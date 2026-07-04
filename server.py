@@ -43,7 +43,12 @@ from song import (
     scale_degree_for_pitch,
 )
 from audio import find_wem_files, convert_wem
-from tunings import tuning_name, DEFAULT_TUNINGS, DEFAULT_REFERENCE_PITCH, apply_reference_pitch
+from tunings import (
+    DEFAULT_REFERENCE_PITCH, DEFAULT_TUNINGS, PROFILE_IDS, PROFILE_PATHWAYS,
+    apply_flat_instrument_patch_to_profiles, apply_reference_pitch,
+    normalize_instrument_profile, normalize_instrument_profiles,
+    settings_with_instrument_profiles, tuning_name,
+)
 import sloppak as sloppak_mod
 import drums as drums_mod
 import notation as notation_mod
@@ -9862,7 +9867,7 @@ def get_tunings():
 @app.get("/api/settings")
 def get_settings():
     cfg = _load_config(CONFIG_DIR / "config.json")
-    return cfg if cfg is not None else _default_settings()
+    return settings_with_instrument_profiles(cfg if cfg is not None else _default_settings())
 
 
 @app.post("/api/settings")
@@ -10073,6 +10078,38 @@ def save_settings(data: dict):
             else:
                 return {"error": "tuning must be a name (string) or a list of semitone offsets"}
 
+    if "pathway" in data:
+        raw = data["pathway"]
+        if raw is not None:
+            if not isinstance(raw, str) or raw not in PROFILE_PATHWAYS:
+                return {"error": "pathway must be one of songs, practice, learn, studio"}
+            updates["pathway"] = raw
+
+    _profile_patch = None
+    if "instrument_profiles" in data:
+        raw = data["instrument_profiles"]
+        if raw is not None:
+            if not isinstance(raw, dict):
+                return {"error": "instrument_profiles must be an object"}
+            # Validate each PROVIDED profile individually and keep the patch
+            # PARTIAL — /api/settings is a partial-merge endpoint, so updating one
+            # profile must NOT reset the others to defaults. Merged over the
+            # persisted profiles inside the lock below (not via the wholesale
+            # `updates` merge, which would clobber the unspecified ones).
+            _profile_patch = {}
+            for _pid, _praw in raw.items():
+                if _pid not in PROFILE_IDS:
+                    return {"error": f"unknown instrument profile: {_pid}"}
+                _prof, _perr = normalize_instrument_profile(_pid, _praw)
+                if _perr:
+                    return {"error": _perr}
+                _profile_patch[_pid] = _prof
+    if "active_instrument_profile" in data:
+        raw = data["active_instrument_profile"]
+        if raw is not None:
+            if not isinstance(raw, str) or raw not in PROFILE_IDS:
+                return {"error": "active_instrument_profile must be one of guitar-lead, guitar-rhythm, bass"}
+            updates["active_instrument_profile"] = raw
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
     # Critical section — the read-merge-write must be atomic. FastAPI runs
     # sync handlers in a threadpool, so two concurrent partial POSTs (e.g.
@@ -10089,6 +10126,29 @@ def save_settings(data: dict):
         if cfg is None:
             cfg = _default_settings()
         cfg.update(updates)
+        if _profile_patch is not None:
+            # Merge the validated partial over the persisted profiles so a
+            # single-profile update leaves the others intact (a fresh config
+            # falls back to the built-in defaults for the unspecified ones).
+            _existing, _ = normalize_instrument_profiles(cfg.get("instrument_profiles"))
+            if _existing is None:
+                _existing = {}
+            _existing.update(_profile_patch)
+            cfg["instrument_profiles"] = _existing
+        # Only canonicalize/persist the instrument profiles when this save
+        # actually touches them (or the config already carries them). GET always
+        # virtualizes profiles via settings_with_instrument_profiles, so a save
+        # that doesn't touch instrument settings must stay a plain partial merge
+        # — otherwise an empty (or unrelated) POST would freeze the default
+        # profiles into the on-disk config.
+        _profile_keys = ("instrument", "string_count", "tuning", "reference_pitch",
+                         "pathway", "instrument_profiles", "active_instrument_profile")
+        if "instrument_profiles" in cfg or any(k in updates for k in _profile_keys):
+            try:
+                cfg = apply_flat_instrument_patch_to_profiles(cfg, updates)
+            except ValueError as exc:
+                return {"error": str(exc)}
+            cfg = settings_with_instrument_profiles(cfg)
         _atomic_write_file(config_file, json.dumps(cfg, indent=2).encode("utf-8"))
     return {"message": ". ".join(messages) if messages else "Settings saved"}
 
@@ -10100,7 +10160,8 @@ def save_settings(data: dict):
 _RESETTABLE_SETTINGS_KEYS = frozenset({
     "default_arrangement", "demucs_server_url", "master_difficulty",
     "av_offset_ms", "countdown_before_song", "miss_penalty", "fail_behavior",
-    "reference_pitch", "instrument", "string_count", "tuning",
+    "reference_pitch", "instrument", "string_count", "tuning", "pathway",
+    "instrument_profiles", "active_instrument_profile",
     "achievements_enabled", "use_amp_sims",
 })
 
@@ -10125,6 +10186,16 @@ def reset_settings(data: dict):
         removed = [k for k in keys if k in cfg]
         for k in removed:
             del cfg[k]
+        # `pathway` is mirrored into every instrument profile, so deleting the
+        # flat key alone doesn't reset it — GET re-derives the value from the
+        # active profile. Reset it inside the persisted profiles too (back to the
+        # "songs" default), without disturbing the rest of the instrument config.
+        if "pathway" in keys and isinstance(cfg.get("instrument_profiles"), dict):
+            for prof in cfg["instrument_profiles"].values():
+                if isinstance(prof, dict):
+                    prof["pathway"] = "songs"
+            if "pathway" not in removed:
+                removed.append("pathway")
         _atomic_write_file(config_file, json.dumps(cfg, indent=2).encode("utf-8"))
     return {"message": "Settings reset", "reset": removed}
 
@@ -10216,6 +10287,18 @@ def _validate_server_config_types(cfg: dict) -> str | None:
                     return "server_config.tuning offsets must be ≤8 integers between -12 and 12"
             else:
                 return "server_config.tuning must be a name (string) or a list of semitone offsets"
+    if "pathway" in cfg:
+        v = cfg["pathway"]
+        if v is not None and (not isinstance(v, str) or v not in PROFILE_PATHWAYS):
+            return "server_config.pathway must be one of songs, practice, learn, studio"
+    if "instrument_profiles" in cfg:
+        profiles, error = normalize_instrument_profiles(cfg["instrument_profiles"])
+        if error:
+            return f"server_config.{error}"
+    if "active_instrument_profile" in cfg:
+        v = cfg["active_instrument_profile"]
+        if v is not None and (not isinstance(v, str) or v not in PROFILE_IDS):
+            return "server_config.active_instrument_profile must be one of guitar-lead, guitar-rhythm, bass"
     return None
 
 
@@ -10585,6 +10668,7 @@ def export_settings():
     server_config = _load_config(config_file)
     if server_config is None:
         server_config = _default_settings()
+    server_config = settings_with_instrument_profiles(server_config)
 
     # Snapshot the library DB + custom art FIRST: if the irreplaceable state
     # can't be captured, abort with an error rather than hand back a bundle
@@ -10827,7 +10911,7 @@ def import_settings(bundle: dict):
         with _settings_lock:
             _atomic_write_file(
                 CONFIG_DIR / "config.json",
-                json.dumps(server_config, indent=2).encode("utf-8"),
+                json.dumps(settings_with_instrument_profiles(server_config), indent=2).encode("utf-8"),
             )
     except OSError as e:
         # Phase-1 validation should have caught all foreseeable
